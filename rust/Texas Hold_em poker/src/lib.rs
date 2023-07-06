@@ -180,7 +180,6 @@ pub enum Category {
 
 impl PartialEq<Category> for Category {
   fn eq(&self, other: &Category) -> bool {
-    self.
   }
 
   fn ne(&self, other: &Category) -> bool {
@@ -392,6 +391,13 @@ impl Category {
     Some([x[0], x[1], x[2], x[3], x[4]])
   }
 
+  // fn find_best_composition<'a>(community_cards: &'a Vec<&'a Card>, player_cards: [&'a Card; 2])->Option<(Category,[&'a Card;5])>{
+  //   let mut all = Vec::new();
+  //   community_cards.for_each(|c| all.push(c));
+  //   player_cards.for_each(|c| all.push(c));
+  //
+  // }
+
   // pub fn category<'a>(community_cards: &Vec<&Card>, player_cards: [&Card; 2]) -> Category {
   //
   // }
@@ -468,12 +474,17 @@ impl Round {
     &self.community_cards
   }
 
-  pub fn play(&mut self) {
+  /**
+  @return a list of winners
+  */
+  pub fn play(&mut self)-> Vec<Playing> {
     self.deal_all_players();
     self.deal_flop();
     self.deal_turn();
     self.deal_river();
   }
 
-  pub fn get_winner(&self) -> &Playing {}
+  pub fn get_winner(&self) -> &Playing {
+
+  }
 }
