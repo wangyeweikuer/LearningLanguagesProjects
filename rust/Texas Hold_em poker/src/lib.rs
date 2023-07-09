@@ -160,12 +160,12 @@ pub struct Player {
 }
 
 pub struct Playing<'a> {
-  hand: Vec<Card>,
+  hand: [Card; 2],
   player: &'a Player,
   round: Option<&'a Round<'a>>,
 }
 
-#[derive(Ord, Debug)]
+#[derive(Ord, Debug, Ordering)]
 pub enum Category {
   StraightFlush = 0,
   FourOfAKind = 1,
@@ -179,8 +179,7 @@ pub enum Category {
 }
 
 impl PartialEq<Category> for Category {
-  fn eq(&self, other: &Category) -> bool {
-  }
+  fn eq(&self, other: &Category) -> bool {}
 
   fn ne(&self, other: &Category) -> bool {
     todo!()
@@ -215,193 +214,205 @@ fn sort_reversed(mut cards: &Vec<&Card>, ace_as_big: bool) {
   cards.sort_by(|&a, &b| b.rank(ace_as_big).cmp(&a.rank(ace_as_big)));
 }
 
-impl Category {
-  fn find_straight<'a>(mut cards: &'a Vec<&'a Card>, ace_as_big: bool) -> Option<[&'a Card; 5]> {
-    sort_reversed(&cards, ace_as_big);
-    let mut found = [&Card; 5];
-    for i in 0..cards.len() - 4 {
-      let now = cards[i].rank(ace_as_big);
-      found[0] = &cards[i];
-      for j in 1..5 {
-        if cards[j + i].rank(ace_as_big) + j != now {
-          break;
-        }
-        found[j] = &cards[j + i];
+fn find_straight_inner<'a>(mut cards: &'a Vec<&'a Card>, ace_as_big: bool) -> Option<[&'a Card; 5]> {
+  sort_reversed(&cards, ace_as_big);
+  let mut found = [&Card; 5];
+  for i in 0..cards.len() - 4 {
+    let now = cards[i].rank(ace_as_big);
+    found[0] = &cards[i];
+    for j in 1..5 {
+      if cards[j + i].rank(ace_as_big) + j != now {
+        break;
       }
-      Some(found)
+      found[j] = &cards[j + i];
     }
-    None
+    Some(found)
   }
-
-  fn find_straight_flush<'a>(mut cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-    if cards.len() < 5 {
-      return None;
-    }
-    let vv = partition_by(cards, |card| card.suit);
-    let r = vv.iter().filter(|&x| x.len() >= 5).next();
-    if r.is_none() {
-      return None;
-    }
-    let r = r.unwrap();
-    let found = Category::find_straight(r, true);
-    return match found {
-      None => find_straight(r.clone(), true),
-      Some(_) => found
-    };
-  }
-
-  fn find_same_ranks<'a, F>(mut cards: &'a Vec<&'a Card>, sort_first: bool, same_num: usize, filter: F)
-                            -> Option<Vec<usize>>
-  where F: FnMut(usize) -> bool {
-    if cards.len() < 5 {
-      return None;
-    }
-    if sort_first {
-      sort_reversed(cards, true);
-    }
-
-    let mut res = vec![usize; same_num];
-    for i in 0..cards.len() - same_num + 1 {
-      if !filter(i) {
-        continue;
-      }
-      res[0] = i;
-      let mut ok = true;
-      for j in 1..same_num {
-        if cards[i].rank(true) == cards[i + j].rank(true) {
-          res[j] = i + j;
-        } else {
-          ok = false;
-          break;
-        }
-      }
-      if ok {
-        return Some(res);
-      }
-    }
-    None
-  }
-
-  fn find_any<'a, F>(cards: &'a Vec<&'a Card>, same_num: usize, filter: F) -> Vec<&'a Card>
-  where F: FnMut(usize) -> bool {
-    let mut res = vec![&Card; same_num];
-    for i in 0..cards.len() {
-      if filter(i) {
-        res.push(cards[i]);
-      }
-    }
-    res
-  }
-
-  fn find_four_of_a_kind<'a>(mut cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-    if cards.len() < 5 {
-      return None;
-    }
-    let found = Category::find_same_ranks(cards, true, 4, || true);
-    return match found {
-      None => None,
-      Some(x) => {
-        let other = Category::find_any(cards, 1, |idx| !x.contains(&idx));
-        Some([&cards[x[0]], &cards[x[1]], &cards[x[2]], &cards[x[3]], other[0]])
-      }
-    };
-  }
-
-  fn find_full_house<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-    if cards.len() < 5 {
-      return None;
-    }
-    let found = Category::find_same_ranks(cards, true, 3, || true);
-    match found {
-      None => None,
-      Some(x) => {
-        let other = Category::find_same_ranks(cards, false, 2, |idx| {
-          !x.contains(&idx)
-        }).unwrap();
-        Some([&cards[x[0]], &cards[x[1]], &cards[x[2]], &cards[other[0]], &cards[other[1]]])
-      }
-    }
-  }
-
-  fn find_flush<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-    if cards.len() < 5 {
-      return None;
-    }
-    let parts = partition_by(cards, |card| { card.suit });
-    let r = parts.iter().filter(|&x| x.len() >= 5).next();
-    match r {
-      None => None,
-      Some(x) => Some([x[0], x[1], x[2], x[3], x[4]])
-    }
-  }
-
-  fn find_three_of_a_kind<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-    if cards.len() < 5 {
-      return None;
-    }
-    let found = Category::find_same_ranks(cards, true, 3, || true);
-    match found {
-      None => None,
-      Some(x) => {
-        let others = Category::find_any(cards, 2, |idx| !x.contains(&idx));
-        Some([&cards[x[0]], &cards[x[1]], &cards[x[2]], others[0], others[1]])
-      }
-    }
-  }
-
-  fn find_two_pairs<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-    if cards.len() < 5 {
-      return None;
-    }
-    let found = Category::find_same_ranks(cards, true, 2, || true);
-    if found.is_none() {
-      return None;
-    }
-    let x = found.unwrap();
-    let x1 = Category::find_same_ranks(cards, false, 2, |idx| !x.contains(&idx));
-    match x1 {
-      None => None,
-      Some(_) => {
-        let other = Category::find_any(cards, 1, |idx| !x.contains(&idx) && !x1.contains(&idx));
-        Some([&cards[x[0]], &cards[x[1]], &cards[x1[0]], &cards[x1[1]], other[0]])
-      }
-    }
-  }
-
-  fn find_one_pairs<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-    if cards.len() < 5 {
-      return None;
-    }
-    let found = Category::find_same_ranks(cards, true, 2, || true);
-    match found {
-      None => { None }
-      Some(x) => {
-        let others = Category::find_any(cards, 3, |idx| !x.contains(&idx));
-        Some([&cards[x[0]], &cards[x[1]], others[0], others[1], others[2]])
-      }
-    }
-  }
-
-  fn find_high_card<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-    if cards.len() < 5 {
-      return None;
-    }
-    sort_reversed(cards, true);
-    let x = Category::find_any(cards, 5, || true);
-    Some([x[0], x[1], x[2], x[3], x[4]])
-  }
-
-  // fn find_best_composition<'a>(community_cards: &'a Vec<&'a Card>, player_cards: [&'a Card; 2])->Option<(Category,[&'a Card;5])>{
-  //   let mut all = Vec::new();
-  //   community_cards.for_each(|c| all.push(c));
-  //   player_cards.for_each(|c| all.push(c));
-  //
-  // }
-
-  // pub fn category<'a>(community_cards: &Vec<&Card>, player_cards: [&Card; 2]) -> Category {
-  //
-  // }
+  None
 }
+
+fn find_same_ranks<'a, F>(mut cards: &'a Vec<&'a Card>, sort_first: bool, same_num: usize, filter: F)
+                          -> Option<Vec<usize>>
+where F: FnMut(usize) -> bool {
+  if sort_first {
+    sort_reversed(cards, true);
+  }
+
+  let mut res = vec![usize; same_num];
+  for i in 0..cards.len() - same_num + 1 {
+    if !filter(i) {
+      continue;
+    }
+    res[0] = i;
+    let mut ok = true;
+    for j in 1..same_num {
+      if cards[i].rank(true) == cards[i + j].rank(true) {
+        res[j] = i + j;
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if ok {
+      return Some(res);
+    }
+  }
+  None
+}
+
+fn find_any<'a, F>(cards: &'a Vec<&'a Card>, same_num: usize, filter: F) -> Vec<&'a Card>
+where F: FnMut(usize) -> bool {
+  let mut res = vec![&Card; same_num];
+  for i in 0..cards.len() {
+    if filter(i) {
+      res.push(cards[i]);
+    }
+  }
+  res
+}
+
+fn find_straight_flush<'a>(mut cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
+  let vv = partition_by(cards, |card| card.suit);
+  let r = vv.iter().filter(|&x| x.len() >= 5).next();
+  if r.is_none() {
+    return None;
+  }
+  let r = r.unwrap();
+  let found = find_straight_inner(r, true);
+  return match found {
+    None => find_straight_inner(r, false),
+    Some(_) => found
+  };
+}
+
+fn find_four_of_a_kind<'a>(mut cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
+  let found = find_same_ranks(cards, true, 4, || true);
+  return match found {
+    None => None,
+    Some(x) => {
+      let other = find_any(cards, 1, |idx| !x.contains(&idx));
+      Some([&cards[x[0]], &cards[x[1]], &cards[x[2]], &cards[x[3]], other[0]])
+    }
+  };
+}
+
+fn find_full_house<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
+  let found = find_same_ranks(cards, true, 3, || true);
+  match found {
+    None => None,
+    Some(x) => {
+      let other = find_same_ranks(cards, false, 2, |idx| {
+        !x.contains(&idx)
+      }).unwrap();
+      Some([&cards[x[0]], &cards[x[1]], &cards[x[2]], &cards[other[0]], &cards[other[1]]])
+    }
+  }
+}
+
+fn find_flush<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
+  let parts = partition_by(cards, |card| { card.suit });
+  let r = parts.iter().filter(|&x| x.len() >= 5).next();
+  match r {
+    None => None,
+    Some(x) => Some([x[0], x[1], x[2], x[3], x[4]])
+  }
+}
+
+fn find_straight<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
+  let x = find_straight_inner(cards, true);
+  match x {
+    None => find_straight_inner(cards, false),
+    Some(x) => Some(x)
+  }
+}
+
+fn find_three_of_a_kind<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
+  let found = find_same_ranks(cards, true, 3, || true);
+  match found {
+    None => None,
+    Some(x) => {
+      let others = find_any(cards, 2, |idx| !x.contains(&idx));
+      Some([&cards[x[0]], &cards[x[1]], &cards[x[2]], others[0], others[1]])
+    }
+  }
+}
+
+fn find_two_pairs<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
+  let found = find_same_ranks(cards, true, 2, || true);
+  if found.is_none() {
+    return None;
+  }
+  let x = found.unwrap();
+  let x1 = find_same_ranks(cards, false, 2, |idx| !x.contains(&idx));
+  match x1 {
+    None => None,
+    Some(_) => {
+      let other = find_any(cards, 1, |idx| !x.contains(&idx) && !x1.contains(&idx));
+      Some([&cards[x[0]], &cards[x[1]], &cards[x1[0]], &cards[x1[1]], other[0]])
+    }
+  }
+}
+
+fn find_one_pairs<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
+  let found = find_same_ranks(cards, true, 2, || true);
+  match found {
+    None => { None }
+    Some(x) => {
+      let others = find_any(cards, 3, |idx| !x.contains(&idx));
+      Some([&cards[x[0]], &cards[x[1]], others[0], others[1], others[2]])
+    }
+  }
+}
+
+fn find_high_card<'a>(cards: &'a Vec<&'a Card>) -> [&'a Card; 5] {
+  sort_reversed(cards, true);
+  [cards[0], cards[1], cards[2], cards[3], cards[4]]
+}
+
+fn find_best_composition<'a>(community_cards: &'a Vec<Card>, player_cards: &[Card; 2]) -> (Category, [&'a Card; 5]) {
+  let &mut cards = Vec::new();
+  community_cards.for_each(|c| cards.push(c));
+  player_cards.for_each(|c| cards.push(c));
+  let x = find_straight_flush(cards);
+  if x.is_some() {
+    return (Category::StraightFlush, x.unwrap());
+  }
+  let x = find_four_of_a_kind(cards);
+  if x.is_some() {
+    return (Category::FourOfAKind, x.unwrap());
+  }
+  let x = find_full_house(cards);
+  if x.is_some() {
+    return (Category::FullHouse, x.unwrap());
+  }
+  let x = find_flush(cards);
+  if x.is_some() {
+    return (Category::Flush, x.unwrap());
+  }
+  let x = find_straight(cards);
+  if x.is_some() {
+    return (Category::Straight, x.unwrap());
+  }
+  let x = find_three_of_a_kind(cards);
+  if x.is_some() {
+    return (Category::ThreeOfAKind, x.unwrap());
+  }
+  let x = find_two_pairs(cards);
+  if x.is_some() {
+    return (Category::TwoPairs, x.unwrap());
+  }
+  let x = find_one_pairs(cards);
+  if x.is_some() {
+    return (Category::OnePairs, x.unwrap());
+  }
+  let x = find_high_card(cards);
+  (Category::HighCard, x)
+}
+
+// pub fn category<'a>(community_cards: &Vec<&Card>, player_cards: [&Card; 2]) -> Category {
+//
+// }
+
 
 pub struct Round<'a> {
   players: Vec<&'a Player>,
@@ -474,17 +485,23 @@ impl Round {
     &self.community_cards
   }
 
+  pub fn get_winners(&self) -> Vec<&Playing> {
+    let h: Option<(Category, [&Card; 5])> = self.playings.iter().map(|&playing| {
+      return find_best_composition(&self.community_cards, &playing.hand);
+    }).max_by(|&a, &b| {
+      let cmp = a.0.cmp(&b.0);
+      a.0 == b.0;
+    });
+  }
+
   /**
-  @return a list of winners
-  */
-  pub fn play(&mut self)-> Vec<Playing> {
+   * @return a list of winners
+   */
+  pub fn play(&mut self) -> Vec<&Playing> {
     self.deal_all_players();
     self.deal_flop();
     self.deal_turn();
     self.deal_river();
-  }
-
-  pub fn get_winner(&self) -> &Playing {
-
+    Round::get_winners(self)
   }
 }
