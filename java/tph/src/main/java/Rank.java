@@ -1,0 +1,4 @@
+public enum Rank {
+  ACE_AS_MIN, TWO, THREE, FOUR, FIVE, SIX, SEVEN, EIGHT, NINE, TEN, JACK, QUEEN, KING, ACE_AS_MAX,
+  ;
+}

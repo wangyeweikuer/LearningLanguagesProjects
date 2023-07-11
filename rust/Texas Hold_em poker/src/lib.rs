@@ -2,24 +2,30 @@
 
 // mod domain;
 
+mod domain;
+
 use std::cmp::Ordering;
-use std::fmt::{Display, Formatter};
+use std::cmp::Ordering::Equal;
+use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::rc::{Rc, Weak};
 // use random::Source;
-use shuffle::shuffler::Shuffler;
-use shuffle::irs::Irs;
-use rand::rngs::mock::StepRng;
+// use shuffle::shuffler::Shuffler;
+// use shuffle::irs::Irs;
+// use rand::rngs::mock::StepRng;
+use rand::thread_rng;
+use rand::seq::SliceRandom;
 use std::collections::HashMap;
+use std::hash::Hash;
 use crate::Rank::{Ace, Eight, Five, Four, Jack, King, Nine, Queen, Seven, Six, Ten, Three, Two};
 use crate::Suit::{Clubs, Diamonds, Hearts, Spades};
 
-#[derive(Debug, Clone, Copy, Eq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum Suit {
   Spades,
   Hearts,
-  Diamonds,
   Clubs,
+  Diamonds,
 }
 
 impl Suit {
@@ -37,6 +43,7 @@ impl Suit {
   }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Rank {
   Two,
   Three,
@@ -71,7 +78,7 @@ impl Rank {
       Ace => 'A',
     }
   }
-  pub fn int(&self, ace_as_big: bool) -> i8 {
+  pub fn int(&self, ace_as_big: bool) -> usize {
     match self {
       Two => 2,
       Three => 3,
@@ -99,7 +106,7 @@ impl Rank {
   }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Card {
   suit: Suit,
   rank: Rank,
@@ -112,8 +119,12 @@ impl Display for Card {
 }
 
 impl Card {
-  fn rank(&self, ace_as_big: bool) -> int {
+  fn rank(&self, ace_as_big: bool) -> usize {
     self.rank.int(ace_as_big)
+  }
+
+  fn compare(&self, other: &Card, ace_as_big: bool) -> Ordering {
+    self.rank(ace_as_big).cmp(&other.rank(ace_as_big))
   }
 }
 
@@ -137,10 +148,12 @@ impl Deck {
     deck
   }
 
+  //https://stackoverflow.com/questions/26033976/how-do-i-create-a-vec-from-a-range-and-shuffle-it
   pub fn shuffle(&mut self) {
-    let mut rng = StepRng::new(2, 13);
-    let mut irs = Irs::default();
-    irs.shuffle(&mut self.cards, &mut rng);
+    // let mut rng = StepRng::new(2, 13);
+    // let mut irs = Irs::default();
+    // irs.shuffle(&mut self.cards, &mut rng);
+    self.cards.shuffle(&mut thread_rng())
   }
 
   pub fn deal(&mut self) -> Card {
@@ -160,12 +173,12 @@ pub struct Player {
 }
 
 pub struct Playing<'a> {
-  hand: [Card; 2],
+  hand: Vec<Card>,
   player: &'a Player,
   round: Option<&'a Round<'a>>,
 }
 
-#[derive(Ord, Debug, Ordering)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Category {
   StraightFlush = 0,
   FourOfAKind = 1,
@@ -178,26 +191,64 @@ pub enum Category {
   HighCard = 8,
 }
 
-impl PartialEq<Category> for Category {
-  fn eq(&self, other: &Category) -> bool {}
+#[derive(Copy, Clone, Debug)]
+struct BestHand {
+  category: Category,
+  reversed_cards: [Card; 5],
+}
 
-  fn ne(&self, other: &Category) -> bool {
-    todo!()
+impl BestHand {
+  fn compare_ranks(a: &[Card], b: &[Card]) -> Ordering {
+    for i in 0..a.len() {
+      let cmp = a[i].compare(&b[i], true);
+      if cmp != Equal {
+        return cmp;
+      }
+    }
+    Equal
+  }
+
+  fn compare(&self, other: &Self) -> Ordering {
+    let cmp = self.category.cmp(&other.category);
+    if cmp != Equal {
+      return cmp;
+    }
+    use Category::*;
+    match self.category {
+      StraightFlush | FourOfAKind | FullHouse | Straight | ThreeOfAKind => {
+        self.reversed_cards[0].compare(&other.reversed_cards[0], true)
+      }
+      Flush => {
+        for i in 0..5 {
+          let cmp = self.reversed_cards[i].compare(&other.reversed_cards[i], true);
+          if cmp != Equal {
+            return cmp;
+          }
+        }
+        return Equal;
+      }
+      TwoPairs => {
+        let cmp = self.reversed_cards[0].compare(&other.reversed_cards[0], true);
+        match cmp {
+          // from 3.. -> [3,4]
+          Equal => BestHand::compare_ranks(&self.reversed_cards[3..], &other.reversed_cards[3..]),
+          _ => cmp
+        }
+      }
+      OnePair => {
+        let cmp = self.reversed_cards[0].compare(&other.reversed_cards[0], true);
+        match cmp {
+          Equal => BestHand::compare_ranks(&self.reversed_cards[2..], &other.reversed_cards[2..]),
+          _ => cmp
+        }
+      }
+      HighCard => BestHand::compare_ranks(&self.reversed_cards, &other.reversed_cards)
+    }
   }
 }
 
-struct BestMatch<'a> {
-  playing: &'a Playing<'a>,
-  cards: Vec<&'a Card>,
-  category: Category,
-}
-
-impl<'a> BestMatch<'a> {
-  fn compare(&self, other: &Self) -> Ordering {}
-}
-
-fn partition_by<'a, F, K>(cards: &'a Vec<&'a Card>, pred: F) -> Vec<Vec<&'a Card>>
-where F: Fn(&Card) -> K {
+fn partition_by<F, K: Eq + PartialEq + Hash>(cards: &Vec<Card>, pred: F) -> Vec<Vec<Card>>
+where F: Fn(Card) -> K {
   let mut map = HashMap::new();
   for &card in cards {
     let k = pred(card);
@@ -210,35 +261,35 @@ where F: Fn(&Card) -> K {
   vv
 }
 
-fn sort_reversed(mut cards: &Vec<&Card>, ace_as_big: bool) {
-  cards.sort_by(|&a, &b| b.rank(ace_as_big).cmp(&a.rank(ace_as_big)));
+fn sort_reversely(cards: &mut Vec<Card>, ace_as_big: bool) {
+  cards.sort_by(|a, b| b.rank(ace_as_big).cmp(&a.rank(ace_as_big)));
 }
 
-fn find_straight_inner<'a>(mut cards: &'a Vec<&'a Card>, ace_as_big: bool) -> Option<[&'a Card; 5]> {
-  sort_reversed(&cards, ace_as_big);
-  let mut found = [&Card; 5];
+fn find_straight_inner(cards: &mut Vec<Card>, ace_as_big: bool) -> Option<[usize; 5]> {
+  sort_reversely(cards, ace_as_big);
+  let mut found = [0; 5];
   for i in 0..cards.len() - 4 {
     let now = cards[i].rank(ace_as_big);
-    found[0] = &cards[i];
+    found[0] = i;
     for j in 1..5 {
       if cards[j + i].rank(ace_as_big) + j != now {
         break;
       }
-      found[j] = &cards[j + i];
+      found[j] = j + i;
     }
-    Some(found)
+    return Some(found);
   }
   None
 }
 
-fn find_same_ranks<'a, F>(mut cards: &'a Vec<&'a Card>, sort_first: bool, same_num: usize, filter: F)
+fn find_same_ranks_idx<F>(cards: &mut Vec<Card>, reversely_sort: bool, same_num: usize, mut filter: F)
                           -> Option<Vec<usize>>
 where F: FnMut(usize) -> bool {
-  if sort_first {
-    sort_reversed(cards, true);
+  if reversely_sort {
+    sort_reversely(cards, true);
   }
 
-  let mut res = vec![usize; same_num];
+  let mut res = Vec::with_capacity(same_num);
   for i in 0..cards.len() - same_num + 1 {
     if !filter(i) {
       continue;
@@ -260,9 +311,9 @@ where F: FnMut(usize) -> bool {
   None
 }
 
-fn find_any<'a, F>(cards: &'a Vec<&'a Card>, same_num: usize, filter: F) -> Vec<&'a Card>
+fn find_any<F>(cards: &Vec<Card>, same_num: usize, mut filter: F) -> Vec<Card>
 where F: FnMut(usize) -> bool {
-  let mut res = vec![&Card; same_num];
+  let mut res = Vec::with_capacity(same_num);
   for i in 0..cards.len() {
     if filter(i) {
       res.push(cards[i]);
@@ -271,148 +322,189 @@ where F: FnMut(usize) -> bool {
   res
 }
 
-fn find_straight_flush<'a>(mut cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
+fn find_straight_flush(mut cards: &Vec<Card>) -> Option<BestHand> {
   let vv = partition_by(cards, |card| card.suit);
   let r = vv.iter().filter(|&x| x.len() >= 5).next();
   if r.is_none() {
     return None;
   }
-  let r = r.unwrap();
+  let &mut r = r.unwrap().clone();
   let found = find_straight_inner(r, true);
-  return match found {
-    None => find_straight_inner(r, false),
-    Some(_) => found
+  use Category::StraightFlush;
+  let z = match found {
+    Some(x) => x,
+    None => {
+      let x = find_straight_inner(r, false);
+      match x {
+        None => return None,
+        Some(y) => y
+      }
+    }
   };
+  Some(BestHand {
+    category: StraightFlush,
+    reversed_cards: [cards[z[0]], cards[z[1]], cards[z[2]], cards[z[3]], cards[z[4]]],
+  })
 }
 
-fn find_four_of_a_kind<'a>(mut cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-  let found = find_same_ranks(cards, true, 4, || true);
+fn find_four_of_a_kind(cards: &mut Vec<Card>) -> Option<BestHand> {
+  let found = find_same_ranks_idx(cards, true, 4, |_idx| true);
   return match found {
     None => None,
     Some(x) => {
       let other = find_any(cards, 1, |idx| !x.contains(&idx));
-      Some([&cards[x[0]], &cards[x[1]], &cards[x[2]], &cards[x[3]], other[0]])
+      Some(BestHand {
+        category: Category::FourOfAKind,
+        reversed_cards: [cards[x[0]], cards[x[1]], cards[x[2]], cards[x[3]], other[0]],
+      })
     }
   };
 }
 
-fn find_full_house<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-  let found = find_same_ranks(cards, true, 3, || true);
+fn find_full_house(cards: &mut Vec<Card>) -> Option<BestHand> {
+  let found = find_same_ranks_idx(cards, true, 3, |_idx| true);
   match found {
     None => None,
     Some(x) => {
-      let other = find_same_ranks(cards, false, 2, |idx| {
-        !x.contains(&idx)
-      }).unwrap();
-      Some([&cards[x[0]], &cards[x[1]], &cards[x[2]], &cards[other[0]], &cards[other[1]]])
+      let other = find_same_ranks_idx(cards, false, 2, |idx| !x.contains(&idx),
+      ).unwrap();
+      Some(BestHand {
+        category: Category::FullHouse,
+        reversed_cards: [cards[x[0]], cards[x[1]], cards[x[2]], cards[other[0]], cards[other[1]]],
+      })
     }
   }
 }
 
-fn find_flush<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-  let parts = partition_by(cards, |card| { card.suit });
+fn find_flush(cards: &mut Vec<Card>) -> Option<BestHand> {
+  let parts = partition_by(cards, |card| card.suit);
   let r = parts.iter().filter(|&x| x.len() >= 5).next();
   match r {
     None => None,
-    Some(x) => Some([x[0], x[1], x[2], x[3], x[4]])
+    Some(x) => Some(BestHand {
+      category: Category::Flush,
+      reversed_cards: [x[0], x[1], x[2], x[3], x[4]],
+    })
   }
 }
 
-fn find_straight<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
+fn find_straight(cards: &mut Vec<Card>) -> Option<BestHand> {
   let x = find_straight_inner(cards, true);
-  match x {
-    None => find_straight_inner(cards, false),
-    Some(x) => Some(x)
-  }
+  use Category::Straight;
+  let z = match x {
+    Some(z) => z,
+    None => {
+      let y = find_straight_inner(cards, false);
+      match y {
+        Some(y) => y,
+        None => return None
+      }
+    }
+  };
+  Some(BestHand {
+    category: Straight,
+    reversed_cards: [cards[z[0]], cards[z[1]], cards[z[2]], cards[z[3]], cards[z[4]]],
+  })
 }
 
-fn find_three_of_a_kind<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-  let found = find_same_ranks(cards, true, 3, || true);
+fn find_three_of_a_kind(cards: &mut Vec<Card>) -> Option<BestHand> {
+  let found = find_same_ranks_idx(cards, true, 3, |_idx| true);
   match found {
     None => None,
     Some(x) => {
       let others = find_any(cards, 2, |idx| !x.contains(&idx));
-      Some([&cards[x[0]], &cards[x[1]], &cards[x[2]], others[0], others[1]])
+      Some(BestHand {
+        category: Category::ThreeOfAKind,
+        reversed_cards: [cards[x[0]], cards[x[1]], cards[x[2]], others[0], others[1]],
+      })
     }
   }
 }
 
-fn find_two_pairs<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-  let found = find_same_ranks(cards, true, 2, || true);
-  if found.is_none() {
-    return None;
-  }
-  let x = found.unwrap();
-  let x1 = find_same_ranks(cards, false, 2, |idx| !x.contains(&idx));
-  match x1 {
-    None => None,
-    Some(_) => {
-      let other = find_any(cards, 1, |idx| !x.contains(&idx) && !x1.contains(&idx));
-      Some([&cards[x[0]], &cards[x[1]], &cards[x1[0]], &cards[x1[1]], other[0]])
-    }
-  }
-}
-
-fn find_one_pairs<'a>(cards: &'a Vec<&'a Card>) -> Option<[&'a Card; 5]> {
-  let found = find_same_ranks(cards, true, 2, || true);
+fn find_two_pairs(cards: &mut Vec<Card>) -> Option<BestHand> {
+  let found = find_same_ranks_idx(cards, true, 2, |_idx| true);
   match found {
-    None => { None }
+    None => None,
+    Some(x) => {
+      let x1 = find_same_ranks_idx(cards, false, 2, |idx| !x.contains(&idx));
+      match x1 {
+        None => None,
+        Some(x2) => {
+          let other = find_any(cards, 1, |idx| !x.contains(&idx) && !x2.contains(&idx));
+          Some(BestHand {
+            category: Category::TwoPairs,
+            reversed_cards: [cards[x[0]], cards[x[1]], cards[x2[0]], cards[x2[1]], other[0]],
+          })
+        }
+      }
+    }
+  }
+}
+
+fn find_one_pairs(cards: &mut Vec<Card>) -> Option<BestHand> {
+  let found = find_same_ranks_idx(cards, true, 2, |_idx| true);
+  match found {
+    None => None,
     Some(x) => {
       let others = find_any(cards, 3, |idx| !x.contains(&idx));
-      Some([&cards[x[0]], &cards[x[1]], others[0], others[1], others[2]])
+      Some(BestHand {
+        category: Category::OnePair,
+        reversed_cards: [cards[x[0]], cards[x[1]], others[0], others[1], others[2]],
+      })
     }
   }
 }
 
-fn find_high_card<'a>(cards: &'a Vec<&'a Card>) -> [&'a Card; 5] {
-  sort_reversed(cards, true);
-  [cards[0], cards[1], cards[2], cards[3], cards[4]]
+fn find_high_card(cards: &mut Vec<Card>) -> BestHand {
+  sort_reversely(cards, true);
+  BestHand {
+    category: Category::HighCard,
+    reversed_cards: [cards[0], cards[1], cards[2], cards[3], cards[4]],
+  }
 }
 
-fn find_best_composition<'a>(community_cards: &'a Vec<Card>, player_cards: &[Card; 2]) -> (Category, [&'a Card; 5]) {
-  let &mut cards = Vec::new();
-  community_cards.for_each(|c| cards.push(c));
-  player_cards.for_each(|c| cards.push(c));
-  let x = find_straight_flush(cards);
+fn find_best_composition<'a>(community_cards: &'a Vec<Card>, player_cards: &'a Vec<Card>) -> BestHand {
+  let &mut cards: Vec<Card> = Vec::new();
+  community_cards.iter().for_each(|c| cards.push(c));
+  player_cards.iter().for_each(|c| cards.push(c));
+  let x = find_straight_flush(&cards);
   if x.is_some() {
-    return (Category::StraightFlush, x.unwrap());
+    return x.unwrap();
   }
   let x = find_four_of_a_kind(cards);
   if x.is_some() {
-    return (Category::FourOfAKind, x.unwrap());
+    return x.unwrap();
   }
   let x = find_full_house(cards);
   if x.is_some() {
-    return (Category::FullHouse, x.unwrap());
+    return x.unwrap();
   }
   let x = find_flush(cards);
   if x.is_some() {
-    return (Category::Flush, x.unwrap());
+    return x.unwrap();
   }
   let x = find_straight(cards);
   if x.is_some() {
-    return (Category::Straight, x.unwrap());
+    return x.unwrap();
   }
   let x = find_three_of_a_kind(cards);
   if x.is_some() {
-    return (Category::ThreeOfAKind, x.unwrap());
+    return x.unwrap();
   }
   let x = find_two_pairs(cards);
   if x.is_some() {
-    return (Category::TwoPairs, x.unwrap());
+    return x.unwrap();
   }
   let x = find_one_pairs(cards);
   if x.is_some() {
-    return (Category::OnePairs, x.unwrap());
+    return x.unwrap();
   }
-  let x = find_high_card(cards);
-  (Category::HighCard, x)
+  find_high_card(cards)
 }
 
 // pub fn category<'a>(community_cards: &Vec<&Card>, player_cards: [&Card; 2]) -> Category {
 //
 // }
-
 
 pub struct Round<'a> {
   players: Vec<&'a Player>,
@@ -421,25 +513,29 @@ pub struct Round<'a> {
   playings: Vec<Playing<'a>>,
 }
 
-impl Round {
+struct BestPlaying<'a> {
+  playing: &'a Playing<'a>,
+  best_hand: BestHand,
+}
+
+impl<'a> BestPlaying<'a> {}
+
+impl<'a> Round<'a> {
   pub fn new(players: Vec<&Player>) -> Round {
-    let playings = vec![Playing; players.len()];
+    let mut playings = Vec::with_capacity(players.len());
     for i in 0..players.len() {
       playings[i] = Playing {
-        hand: Vec::new(),
+        hand: vec![],
         player: players[i],
         round: None,
       };
     }
-    let r = Round {
+    let mut r = Round {
       players,
       deck: Deck::new(),
       community_cards: Vec::new(),
       playings,
     };
-    for x in playings {
-      x.round = Some(&r)
-    }
     r
   }
 
@@ -448,14 +544,14 @@ impl Round {
   }
 
   pub fn deal_all_players(&mut self) {
-    for p in self.players {
-      self.playings.push(
-        Playing {
-          player: p,
-          hand: Vec::new(),
-          round: Some(self),
-        })
-    }
+    // for p in self.players {
+    //   self.playings.push(
+    //     Playing {
+    //       player: p,
+    //       hand: [Card; 2],
+    //       round: Some(self),
+    //     })
+    // }
     for _i in 0..2 {
       for x in self.playings.iter_mut() {
         x.hand.push(self.deal());
@@ -463,22 +559,24 @@ impl Round {
     }
   }
 
-
   pub fn deal_flop(&mut self) {
     self.deal();//discard a card
     for _i in 0..3 {
-      self.community_cards.push(self.deal());
+      let c = self.deal();
+      self.community_cards.push(c);
     }
   }
 
   pub fn deal_turn(&mut self) {
     self.deal();//discard a card
-    self.community_cards.push(self.deal());
+    let c = self.deal();
+    self.community_cards.push(c);
   }
 
   pub fn deal_river(&mut self) {
     self.deal();//discard a card
-    self.community_cards.push(self.deal());
+    let c = self.deal();
+    self.community_cards.push(c);
   }
 
   pub fn lookup_community_cards(&self) -> &Vec<Card> {
@@ -486,12 +584,26 @@ impl Round {
   }
 
   pub fn get_winners(&self) -> Vec<&Playing> {
-    let h: Option<(Category, [&Card; 5])> = self.playings.iter().map(|&playing| {
-      return find_best_composition(&self.community_cards, &playing.hand);
-    }).max_by(|&a, &b| {
-      let cmp = a.0.cmp(&b.0);
-      a.0 == b.0;
-    });
+    let playings: Vec<BestPlaying> = self.playings.into_iter().map(|playing| {
+      let x = find_best_composition(&self.community_cards, &playing.hand);
+      BestPlaying {
+        playing: &playing,
+        best_hand: x,
+      }
+    }).collect();
+    let max = playings.iter().max_by(|&a, &b| {
+      a.best_hand.compare(&b.best_hand)
+    }).unwrap();
+
+    playings
+      .iter()
+      .filter_map(|a| {
+        match a.best_hand.compare(&max.best_hand) {
+          Equal => { Some(a.playing) }
+          _ => None,
+        }
+      })
+      .collect()
   }
 
   /**
